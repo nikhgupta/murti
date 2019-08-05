@@ -1,0 +1,6 @@
+#!/usr/bin/env ruby
+
+require "murti"
+require "murti/cli"
+
+Murti::CLI.start ARGV
