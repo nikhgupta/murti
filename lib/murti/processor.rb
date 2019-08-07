@@ -311,7 +311,12 @@ module Murti
     def get_format(format)
       data = {basename: File.basename(path, '.*'), extname: File.extname(path)}
       data[:date_format] = get_date_format
-      data[:path_component] = File.dirname(path).gsub(/^#{Regexp.escape(@source)}\/?/, '')
+
+      base = format.split("%{path_component}").first
+      target = File.join(Murti.config.target_for(group: options[:group]), base)
+      pac = path.start_with?(target) ? target.chomp("/") : @source.chomp("/")
+      data[:path_component] = File.dirname(path).gsub(/^#{Regexp.escape(pac)}\/?/, '')
+
       format % data
     end
 

@@ -60,6 +60,7 @@ module Murti
       sources = [src].flatten.compact
       sources = Murti.config.sources_for(options) if sources.empty?
       sources.each do |src|
+        next unless File.exist?(src)
         puts "[INFO]: Organizing #{src}"
         Find.find(src).each do |path|
           next if File.directory?(path)
