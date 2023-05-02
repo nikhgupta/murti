@@ -1,6 +1,6 @@
 module Murti
   class Processor
-    attr_reader :path, :exif, :options
+    attr_reader :path, :exif, :options, :destination
 
     def initialize(options={})
       @blocks = Murti.config.blocks
@@ -34,6 +34,10 @@ module Murti
 
       @blocks[:rule].each do |sb|
         run_hook :process_file_if, *sb[0], sb[1]
+        if @dont_match
+          @matched = false
+          @dont_match = false
+        end
       end
 
       migrate_file
@@ -106,9 +110,15 @@ module Murti
       Murti.debug "#{path} => [SKIP] - CUSTOM" if @skipped
     end
 
+    def extract_software(options={}, &block)
+      software = @exif[:software].to_s
+      @software = block_given? ? block.call(software) : software
+    end
+
     def extract_timestamp(options={}, &block)
       options.each do |key, val|
         send("extract_timestamp_from_#{key}", val, &block)
+        @timestamp = nil if @timestamp && @timestamp > Time.now
       end
     end
 
@@ -117,6 +127,15 @@ module Murti
       match = @basename.match(regex)
       return unless match
       time = block.call(match[1..-1])
+      @timestamp = time.is_a?(Time) ? time : Time.parse(time)
+    rescue StandardError
+    end
+
+    def extract_timestamp_from_path(regex, &block)
+      return if @timestamp
+      match = path.match(regex)
+      return unless match
+      time = block.call(match)
       @timestamp = time.is_a?(Time) ? time : Time.parse(time)
     rescue StandardError
     end
@@ -144,16 +163,8 @@ module Murti
         fields = %i[date_time_original date_time create_date gps_date_stamp date_time_digitized]
         @exif_date = fields.map{|f| dates[f]}.compact.first
       end
-      # binding.pry if !@exif_date
-    end
 
-    def extract_timestamp_from_path(regex, &block)
-      return if @timestamp
-      match = path.match(regex)
-      return unless match
-      time = block.call(match)
-      @timestamp = time.is_a?(Time) ? time : Time.parse(time)
-    rescue StandardError
+      @exif_date = nil if @exif_date && @exif_date > Time.now
     end
 
     def process_file_if_extension(*extensions, &block)
@@ -165,11 +176,23 @@ module Murti
       end
     end
 
+    def process_file_if_valid_software(options={}, &block)
+      return if @matched || !@software
+      return if options[:valid_date] && !@timestamp
+      return if options[:extension] && !has_extension?(options[:extension])
+      return if options[:software] && !(@software =~ options[:software])
+      return if options[:name_regex] && !(@basename =~ options[:name_regex])
+      return if options[:path_regex] && !(path =~ options[:path_regex])
+
+      @matched = { software: @software }.merge(options)
+      instance_eval(&block)
+    end
+
     def process_file_if_valid_date(options={}, &block)
       return if @matched || (!@timestamp && !@exif_date)
       return if options[:extension] && !has_extension?(options[:extension])
       return if options[:name_regex] && !(@basename =~ options[:name_regex])
-      return if options[:path_regex] && !(path =~ options[:name_regex])
+      return if options[:path_regex] && !(path =~ options[:path_regex])
 
       @timestamp ||= @exif_date
       @timestamp = @exif_date if @exif_date && @timestamp.to_date != @exif_date.to_date
@@ -195,8 +218,14 @@ module Murti
       end
     end
 
-    def process_file_if_is_unmatched(*, &block)
+    def process_file_if_is_unmatched(options={}, &block)
       return if @matched
+      return if options[:valid_date] && !@timestamp
+      return if options[:extension] && !has_extension?(options[:extension])
+      return if options[:software] && !(@software =~ options[:software])
+      return if options[:name_regex] && !(@basename =~ options[:name_regex])
+      return if options[:path_regex] && !(path =~ options[:path_regex])
+
       @matched = { unmatched: true }
       instance_eval(&block)
     end
@@ -228,7 +257,7 @@ module Murti
 
     def remove!
       FileUtils.rm path
-      puts "[-DEL]: #{path} => #{dest}"
+      puts "[-DEL]: #{path} => #{destination}"
     end
 
     def migrate_file
@@ -311,6 +340,7 @@ module Murti
     def get_format(format)
       data = {basename: File.basename(path, '.*'), extname: File.extname(path)}
       data[:date_format] = get_date_format
+      data[:software] = @software
 
       base = format.split("%{path_component}").first
       target = File.join(Murti.config.target_for(group: options[:group]), base)
